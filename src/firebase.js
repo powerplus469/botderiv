@@ -1,4 +1,4 @@
-// firebase.js
+// src/firebase.js
 const admin = require('firebase-admin');
 
 let db = null;
@@ -15,11 +15,9 @@ function initFirebase() {
             return false;
         }
         
-        // Nettoie les caractères invisibles
         const cleanJson = credentialsJson.trim();
         const serviceAccount = JSON.parse(cleanJson);
         
-        // Vérifie que les champs requis sont présents
         if (!serviceAccount.project_id || !serviceAccount.private_key) {
             console.log("❌ Firebase: Credentials invalides - champs manquants");
             return false;
@@ -41,4 +39,9 @@ function initFirebase() {
     }
 }
 
-// ... le reste du code
+// ⚠️ VÉRIFIE QUE CE CODE EST PRÉSENT ⚠️
+module.exports = {
+    initFirebase
+};
+
+// Si tu as d'autres fonctions, elles doivent être dans module.exports aussi
