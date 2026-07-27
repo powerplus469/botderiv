@@ -1,211 +1,217 @@
-const { initializeApp } = require('firebase/app');
-const { 
-  getFirestore, 
-  collection, 
-  addDoc, 
-  doc, 
-  setDoc, 
-  updateDoc,
-  getDocs,
-  query,
-  where,
-  orderBy,
-  limit,
-  Timestamp,
-  serverTimestamp
-} = require('firebase/firestore');
+const admin = require('firebase-admin');
 
-// ============ CONFIGURATION FIREBASE ============
-const firebaseConfig = {
-  apiKey: process.env.FIREBASE_API_KEY,
-  authDomain: process.env.FIREBASE_AUTH_DOMAIN,
-  projectId: process.env.FIREBASE_PROJECT_ID,
-  storageBucket: process.env.FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: process.env.FIREBASE_MESSAGING_SENDER_ID,
-  appId: process.env.FIREBASE_APP_ID
-};
+let db = null;
+let initialized = false;
 
-// Initialisation
-const app = initializeApp(firebaseConfig);
-const db = getFirestore(app);
-
-console.log('🔥 Firebase initialisé');
-
-// ============ COLLECTIONS ============
-const COLLECTIONS = {
-  TRADES: 'trades',
-  SIGNALS: 'signals',
-  METRICS: 'metrics',
-  INDICATORS: 'indicators',
-  POSITIONS: 'positions',
-  DAILY_SUMMARY: 'daily_summary'
-};
-
-// ============ ENREGISTREMENT D'UN TRADE ============
-async function saveTrade(tradeData) {
-  try {
-    const docRef = await addDoc(collection(db, COLLECTIONS.TRADES), {
-      ...tradeData,
-      timestamp: serverTimestamp(),
-      date: new Date().toISOString()
-    });
-    console.log(`✅ Trade enregistré | ID: ${docRef.id}`);
-    return docRef.id;
-  } catch (error) {
-    console.error('❌ Erreur saveTrade:', error.message);
-    return null;
-  }
+// ============ INITIALISATION ============
+function initFirebase() {
+    if (initialized) return true;
+    
+    try {
+        // Récupère les credentials depuis la variable d'environnement
+        const credentialsJson = process.env.FIREBASE_CREDENTIALS_JSON;
+        
+        if (!credentialsJson) {
+            console.log("⚠️ Firebase non configuré (FIREBASE_CREDENTIALS_JSON manquant)");
+            return false;
+        }
+        
+        const serviceAccount = JSON.parse(credentialsJson);
+        
+        // Vérifie que les champs requis sont présents
+        if (!serviceAccount.project_id || !serviceAccount.private_key) {
+            console.log("❌ Firebase: Credentials invalides");
+            return false;
+        }
+        
+        admin.initializeApp({
+            credential: admin.credential.cert(serviceAccount)
+        });
+        
+        db = admin.firestore();
+        initialized = true;
+        console.log(`✅ Firebase connecté (Projet: ${serviceAccount.project_id})`);
+        return true;
+        
+    } catch (err) {
+        console.log("❌ Firebase erreur d'initialisation:", err.message);
+        return false;
+    }
 }
 
-// ============ ENREGISTREMENT D'UN SIGNAL ============
-async function saveSignal(signalData) {
-  try {
-    const docRef = await addDoc(collection(db, COLLECTIONS.SIGNALS), {
-      ...signalData,
-      timestamp: serverTimestamp(),
-      date: new Date().toISOString()
-    });
-    console.log(`📊 Signal enregistré | ID: ${docRef.id}`);
-    return docRef.id;
-  } catch (error) {
-    console.error('❌ Erreur saveSignal:', error.message);
-    return null;
-  }
+// ============ VÉRIFICATION DE CONNEXION ============
+function isFirebaseReady() {
+    return initialized && db !== null;
 }
 
-// ============ ENREGISTREMENT DES INDICATEURS ============
-async function saveIndicators(indicatorData) {
-  try {
-    const docRef = await addDoc(collection(db, COLLECTIONS.INDICATORS), {
-      ...indicatorData,
-      timestamp: serverTimestamp(),
-      date: new Date().toISOString()
-    });
-    return docRef.id;
-  } catch (error) {
-    console.error('❌ Erreur saveIndicators:', error.message);
-    return null;
-  }
+// ============ TRADES ============
+async function saveTrade(trade) {
+    if (!isFirebaseReady()) return false;
+    
+    try {
+        const docRef = await db.collection('trades').add({
+            ...trade,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`💾 Trade sauvegardé (${trade.type}) | ID: ${docRef.id}`);
+        return docRef.id;
+    } catch (err) {
+        console.log("❌ Erreur saveTrade:", err.message);
+        return null;
+    }
 }
 
-// ============ MISE À JOUR D'UNE POSITION ============
+// ============ SIGNALS ============
+async function saveSignal(signal) {
+    if (!isFirebaseReady()) return false;
+    
+    try {
+        const docRef = await db.collection('signals').add({
+            ...signal,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`📊 Signal sauvegardé (${signal.type})`);
+        return docRef.id;
+    } catch (err) {
+        console.log("❌ Erreur saveSignal:", err.message);
+        return null;
+    }
+}
+
+// ============ POSITIONS ============
+async function savePosition(position) {
+    if (!isFirebaseReady()) return false;
+    
+    try {
+        const docRef = await db.collection('positions').add({
+            ...position,
+            status: 'open',
+            createdAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`📌 Position ouverte | ID: ${docRef.id}`);
+        return docRef.id;
+    } catch (err) {
+        console.log("❌ Erreur savePosition:", err.message);
+        return null;
+    }
+}
+
 async function updatePosition(positionId, updateData) {
-  try {
-    if (!positionId) return null;
-    const docRef = doc(db, COLLECTIONS.POSITIONS, positionId);
-    await updateDoc(docRef, {
-      ...updateData,
-      updatedAt: serverTimestamp()
-    });
-    console.log(`🔄 Position mise à jour: ${positionId}`);
-    return true;
-  } catch (error) {
-    console.error('❌ Erreur updatePosition:', error.message);
-    return false;
-  }
+    if (!isFirebaseReady() || !positionId) return false;
+    
+    try {
+        await db.collection('positions').doc(positionId).update({
+            ...updateData,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        });
+        console.log(`🔄 Position mise à jour: ${positionId}`);
+        return true;
+    } catch (err) {
+        console.log("❌ Erreur updatePosition:", err.message);
+        return false;
+    }
 }
 
-// ============ CRÉATION D'UNE POSITION ============
-async function createPosition(positionData) {
-  try {
-    const docRef = await addDoc(collection(db, COLLECTIONS.POSITIONS), {
-      ...positionData,
-      createdAt: serverTimestamp(),
-      date: new Date().toISOString(),
-      status: 'open'
-    });
-    console.log(`📌 Position créée | ID: ${docRef.id}`);
-    return docRef.id;
-  } catch (error) {
-    console.error('❌ Erreur createPosition:', error.message);
-    return null;
-  }
+// ============ INDICATEURS ============
+async function saveIndicators(indicators) {
+    if (!isFirebaseReady()) return false;
+    
+    try {
+        await db.collection('indicators').add({
+            ...indicators,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+        return true;
+    } catch (err) {
+        console.log("❌ Erreur saveIndicators:", err.message);
+        return false;
+    }
 }
 
-// ============ ENREGISTREMENT DES MÉTRIQUES ============
-async function saveMetrics(metricsData) {
-  try {
-    const docRef = await addDoc(collection(db, COLLECTIONS.METRICS), {
-      ...metricsData,
-      timestamp: serverTimestamp(),
-      date: new Date().toISOString()
-    });
-    return docRef.id;
-  } catch (error) {
-    console.error('❌ Erreur saveMetrics:', error.message);
-    return null;
-  }
+// ============ MÉTRIQUES ============
+async function saveMetrics(metrics) {
+    if (!isFirebaseReady()) return false;
+    
+    try {
+        await db.collection('metrics').add({
+            ...metrics,
+            timestamp: admin.firestore.FieldValue.serverTimestamp()
+        });
+        return true;
+    } catch (err) {
+        console.log("❌ Erreur saveMetrics:", err.message);
+        return false;
+    }
 }
 
-// ============ ENREGISTREMENT DU RÉSUMÉ JOURNALIER ============
-async function saveDailySummary(summaryData) {
-  try {
-    const today = new Date().toISOString().split('T')[0];
-    const docRef = doc(db, COLLECTIONS.DAILY_SUMMARY, today);
-    await setDoc(docRef, {
-      ...summaryData,
-      date: today,
-      updatedAt: serverTimestamp()
-    });
-    console.log(`📅 Résumé journalier enregistré: ${today}`);
-    return true;
-  } catch (error) {
-    console.error('❌ Erreur saveDailySummary:', error.message);
-    return false;
-  }
+// ============ RÉSUMÉ JOURNALIER ============
+async function saveDailySummary(summary) {
+    if (!isFirebaseReady()) return false;
+    
+    try {
+        const today = new Date().toISOString().split('T')[0];
+        await db.collection('daily_summary').doc(today).set({
+            ...summary,
+            date: today,
+            updatedAt: admin.firestore.FieldValue.serverTimestamp()
+        }, { merge: true });
+        console.log(`📅 Résumé journalier enregistré: ${today}`);
+        return true;
+    } catch (err) {
+        console.log("❌ Erreur saveDailySummary:", err.message);
+        return false;
+    }
+}
+
+// ============ STATISTIQUES ============
+async function getTradeStats() {
+    if (!isFirebaseReady()) return null;
+    
+    try {
+        const snapshot = await db.collection('trades').get();
+        const trades = snapshot.docs.map(doc => doc.data());
+        
+        const total = trades.length;
+        const wins = trades.filter(t => t.profit > 0).length;
+        const losses = trades.filter(t => t.profit < 0).length;
+        const totalProfit = trades.reduce((sum, t) => sum + (t.profit || 0), 0);
+        const winRate = total > 0 ? (wins / total) * 100 : 0;
+        
+        return { total, wins, losses, totalProfit, winRate };
+    } catch (err) {
+        console.log("❌ Erreur getTradeStats:", err.message);
+        return null;
+    }
 }
 
 // ============ RÉCUPÉRATION DES DERNIERS TRADES ============
 async function getRecentTrades(limitCount = 10) {
-  try {
-    const q = query(
-      collection(db, COLLECTIONS.TRADES),
-      orderBy('timestamp', 'desc'),
-      limit(limitCount)
-    );
-    const snapshot = await getDocs(q);
-    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
-  } catch (error) {
-    console.error('❌ Erreur getRecentTrades:', error.message);
-    return [];
-  }
+    if (!isFirebaseReady()) return [];
+    
+    try {
+        const snapshot = await db.collection('trades')
+            .orderBy('timestamp', 'desc')
+            .limit(limitCount)
+            .get();
+        
+        return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+    } catch (err) {
+        console.log("❌ Erreur getRecentTrades:", err.message);
+        return [];
+    }
 }
 
-// ============ RÉCUPÉRATION DES STATISTIQUES ============
-async function getTradeStats() {
-  try {
-    const snapshot = await getDocs(collection(db, COLLECTIONS.TRADES));
-    const trades = snapshot.docs.map(doc => doc.data());
-    
-    const total = trades.length;
-    const wins = trades.filter(t => t.profit > 0).length;
-    const losses = trades.filter(t => t.profit < 0).length;
-    const totalProfit = trades.reduce((sum, t) => sum + (t.profit || 0), 0);
-    const winRate = total > 0 ? (wins / total) * 100 : 0;
-    
-    return {
-      total,
-      wins,
-      losses,
-      totalProfit,
-      winRate
-    };
-  } catch (error) {
-    console.error('❌ Erreur getTradeStats:', error.message);
-    return null;
-  }
-}
-
+// ============ EXPORT ============
 module.exports = {
-  db,
-  saveTrade,
-  saveSignal,
-  saveIndicators,
-  updatePosition,
-  createPosition,
-  saveMetrics,
-  saveDailySummary,
-  getRecentTrades,
-  getTradeStats,
-  COLLECTIONS
+    initFirebase,
+    isFirebaseReady,
+    saveTrade,
+    saveSignal,
+    savePosition,
+    updatePosition,
+    saveIndicators,
+    saveMetrics,
+    saveDailySummary,
+    getTradeStats,
+    getRecentTrades
 };
