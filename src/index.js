@@ -28,8 +28,6 @@ const CONFIG = {
     atrPeriod: 14,
     atrMultiplier: 1.5,
     tradeSize: parseFloat(process.env.TRADE_SIZE) || 1,
-    maxOpenTrades: 1,
-    logInterval: parseInt(process.env.LOG_INTERVAL) || 300000
 };
 
 // ============ ÉTAT ============
@@ -39,7 +37,6 @@ const state = {
     isRunning: true,
     lastSignal: null,
     isProcessing: false,
-    dailyStats: { trades: 0, wins: 0, losses: 0, profit: 0 }
 };
 
 // ============ CONNEXION DERIV ============
@@ -48,6 +45,14 @@ let connection;
 
 function connectDeriv() {
     console.log(`🔄 Connexion à Deriv (App ID: ${CONFIG.appId})...`);
+    console.log(`🔑 Token présent: ${CONFIG.token ? '✅ Oui' : '❌ Non'}`);
+    
+    if (!CONFIG.token) {
+        console.error('❌ DERIV_TOKEN non défini dans les variables d\'environnement');
+        console.log('🔄 Nouvelle tentative dans 10s...');
+        setTimeout(connectDeriv, 10000);
+        return;
+    }
     
     connection = new WebSocket(
         `wss://ws.derivws.com/websockets/v3?app_id=${CONFIG.appId}`
@@ -56,32 +61,48 @@ function connectDeriv() {
     api = new DerivAPI({ connection });
     const basic = api.basic;
 
-   connection.onopen = async () => {
-    console.log('✅ WebSocket connecté');
-    
-    try {
-        console.log('🔑 Tentative d\'authentification...');
-        console.log(`🔑 Token: ${CONFIG.token ? CONFIG.token.substring(0, 8) + '...' : 'NON DÉFINI'}`);
+    connection.onopen = async () => {
+        console.log('✅ WebSocket connecté');
         
-        // ⚠️ IMPORTANT : Vérifie que le token n'est pas vide
-        if (!CONFIG.token) {
-            console.error('❌ DERIV_TOKEN non défini dans les variables d\'environnement');
-            return;
+        // Timeout de 15 secondes pour l'auth
+        const authTimeout = setTimeout(() => {
+            console.error('⏰ Timeout authentification (15s)');
+            connection.close();
+        }, 15000);
+        
+        try {
+            console.log('🔑 Authentification en cours...');
+            console.log(`🔑 Token: ${CONFIG.token.substring(0, 8)}...`);
+            
+            const authResponse = await basic.authorize(CONFIG.token);
+            clearTimeout(authTimeout);
+            
+            console.log('✅ Authentifié avec succès');
+            console.log(`👤 Compte: ${authResponse.authorize.loginid}`);
+            console.log(`🏷️ Type: ${authResponse.authorize.is_virtual ? 'DÉMO' : 'RÉEL'}`);
+            console.log(`💰 Solde: ${authResponse.authorize.balance} USD`);
+            
+            // Démarrer le streaming
+            startCandleStream();
+            await checkExistingPositions();
+            setInterval(runStrategy, 10000);
+            
+            // Log de statut toutes les minutes
+            setInterval(() => {
+                console.log(`⏳ Bot actif | ${new Date().toISOString()}`);
+            }, 60000);
+            
+            console.log('🚀 Bot démarré, en attente de signaux...');
+            
+        } catch (err) {
+            clearTimeout(authTimeout);
+            console.error('❌ Erreur d\'authentification:', err.message);
+            console.error('📚 Stack:', err.stack);
+            console.log('🔄 Nouvelle tentative dans 5s...');
+            setTimeout(connectDeriv, 5000);
         }
-        
-        const authResponse = await basic.authorize(CONFIG.token);
-        console.log('✅ Authentifié avec succès');
-        console.log('📋 Réponse auth:', JSON.stringify(authResponse).substring(0, 200));
-        
-        // ... le reste du code
-        
-    } catch (err) {
-        console.error('❌ Erreur d\'authentification:', err.message);
-        console.error('📚 Stack:', err.stack);
-        console.log('🔄 Nouvelle tentative dans 5s...');
-        setTimeout(connectDeriv, 5000);
-    }
-};
+    };
+
     connection.onclose = () => {
         console.log('🔌 WebSocket fermé, reconnexion dans 5s...');
         setTimeout(connectDeriv, 5000);
@@ -94,6 +115,7 @@ function connectDeriv() {
 
 // ============ STREAMING ============
 function startCandleStream() {
+    console.log('📊 Démarrage du streaming...');
     api.subscribe({
         ticks: CONFIG.symbol,
         subscribe: 1
@@ -173,21 +195,78 @@ function getLastCandles(count = 2) {
 
 // ============ STRATÉGIE ============
 async function runStrategy() {
-    // ... (ta logique de stratégie ici)
-    console.log('🔄 Exécution de la stratégie...');
+    if (state.isProcessing) return;
+    state.isProcessing = true;
+
+    try {
+        if (state.candles.length < CONFIG.maPeriods.long + 2) {
+            state.isProcessing = false;
+            return;
+        }
+
+        const ma15 = calculateMA(CONFIG.maPeriods.short);
+        const ma100 = calculateMA(CONFIG.maPeriods.medium);
+        const ma200 = calculateMA(CONFIG.maPeriods.long);
+        const atr = calculateATR(CONFIG.atrPeriod);
+        
+        if (ma15 === null || ma100 === null || ma200 === null || atr === null) {
+            state.isProcessing = false;
+            return;
+        }
+
+        const lastCandles = getLastCandles(2);
+        if (!lastCandles) {
+            state.isProcessing = false;
+            return;
+        }
+
+        const prevClose = lastCandles[0].close;
+        const currentClose = lastCandles[1].close;
+        const threshold = atr * CONFIG.atrMultiplier;
+        const distanceFromMA200 = Math.abs(currentClose - ma200);
+
+        const isBullishTrend = ma100 < ma200;
+        const isBearishTrend = ma100 > ma200;
+
+        // Signal BUY
+        const buyCross = prevClose < ma200 && currentClose > ma200;
+        const isValidBuy = isBullishTrend && buyCross && distanceFromMA200 >= threshold;
+
+        // Signal SELL
+        const sellCross = prevClose > ma200 && currentClose < ma200;
+        const isValidSell = isBearishTrend && sellCross && distanceFromMA200 >= threshold;
+
+        // Exécution
+        if (isValidBuy && state.lastSignal !== 'BUY' && !state.currentPosition) {
+            console.log(`📈 SIGNAL BUY | Prix: ${currentClose.toFixed(2)}`);
+            await executeTrade('BUY', currentClose);
+            state.lastSignal = 'BUY';
+        } 
+        else if (isValidSell && state.lastSignal !== 'SELL' && !state.currentPosition) {
+            console.log(`📉 SIGNAL SELL | Prix: ${currentClose.toFixed(2)}`);
+            await executeTrade('SELL', currentClose);
+            state.lastSignal = 'SELL';
+        }
+
+    } catch (err) {
+        console.error('❌ Erreur stratégie:', err.message);
+    }
+
+    state.isProcessing = false;
 }
 
 // ============ EXÉCUTION DES ORDRES ============
 async function executeTrade(type, price) {
-    // ... (ta logique d'exécution ici)
+    // ... À implémenter
+    console.log(`📊 Trade ${type} à ${price}`);
 }
 
 async function checkExistingPositions() {
-    // ... (ta logique ici)
+    // ... À implémenter
+    console.log('🔍 Vérification positions existantes...');
 }
 
 // ============ DÉMARRAGE ============
 console.log('🤖 Deriv MA Bot v2.0 - Firebase');
 console.log(`📊 Symbole: ${CONFIG.symbol}`);
-console.log(`🔑 Token présent: ${CONFIG.token ? '✅ Oui' : '❌ Non'}`);
 connectDeriv();
