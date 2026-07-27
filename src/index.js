@@ -42,12 +42,13 @@ const state = {
 let api;
 let connection;
 let isConnecting = false;
+let authAttempts = 0;
 
 function connectDeriv() {
     if (isConnecting) return;
     isConnecting = true;
     
-    console.log(`🔄 Connexion à Deriv...`);
+    console.log(`🔄 Connexion à Deriv... (Tentative ${authAttempts + 1})`);
     
     try {
         connection = new WebSocket(
@@ -61,23 +62,28 @@ function connectDeriv() {
             console.log('✅ WebSocket connecté');
             
             try {
-                console.log('🔑 Auth...');
+                console.log('🔑 Authentification en cours...');
+                console.log(`🔑 Token: ${CONFIG.token ? CONFIG.token.substring(0, 8) + '...' : 'NON DÉFINI'}`);
                 
-                // ⚠️ TIMEOUT RAPIDE (3 secondes)
+                // ⚠️ TIMEOUT DE 10 SECONDES (augmenté)
                 const timeout = new Promise((_, reject) => 
-                    setTimeout(() => reject(new Error('Timeout')), 3000)
+                    setTimeout(() => reject(new Error('Timeout (10s)')), 10000)
                 );
                 
+                console.log('⏳ Envoi de la requête d\'auth...');
                 const auth = await Promise.race([
                     basic.authorize(CONFIG.token),
                     timeout
                 ]);
                 
-                console.log(`✅ Auth OK | ${auth.authorize.loginid}`);
-                console.log(`💰 ${auth.authorize.balance} USD`);
-                console.log('🚀 Bot prêt !');
+                console.log(`✅ Authentifié avec succès !`);
+                console.log(`👤 Compte: ${auth.authorize.loginid}`);
+                console.log(`🏷️ Type: ${auth.authorize.is_virtual ? 'DÉMO' : 'RÉEL'}`);
+                console.log(`💰 Solde: ${auth.authorize.balance} USD`);
+                console.log(`🚀 Bot prêt !`);
                 
                 isConnecting = false;
+                authAttempts = 0;
                 
                 // Démarrer en arrière-plan
                 setTimeout(() => {
@@ -92,20 +98,34 @@ function connectDeriv() {
                 
             } catch (err) {
                 isConnecting = false;
-                console.error('❌ Auth error:', err.message);
+                authAttempts++;
+                console.error(`❌ Erreur authentification (Tentative ${authAttempts}):`, err.message);
+                
+                if (err.message.includes('Timeout')) {
+                    console.log('💡 Le serveur Deriv met trop de temps à répondre.');
+                    console.log('💡 Vérifie que ton token est valide et que tu es en ligne.');
+                }
+                
+                console.log('🔄 Nouvelle tentative dans 5s...');
                 setTimeout(connectDeriv, 5000);
             }
         };
 
         connection.onclose = () => {
             isConnecting = false;
-            console.log('🔌 Fermé, reconnexion...');
-            setTimeout(connectDeriv, 5000);
+            console.log('🔌 WebSocket fermé');
+            if (authAttempts < 5) {
+                console.log('🔄 Reconnexion dans 5s...');
+                setTimeout(connectDeriv, 5000);
+            } else {
+                console.error('❌ Trop de tentatives. Arrêt du bot.');
+                process.exit(1);
+            }
         };
 
         connection.onerror = (err) => {
             isConnecting = false;
-            console.error('⚠️ Erreur:', err.message);
+            console.error('⚠️ Erreur WebSocket:', err.message);
         };
         
     } catch (err) {
@@ -118,7 +138,7 @@ function connectDeriv() {
 // ============ STREAMING ============
 async function startCandleStream() {
     try {
-        console.log('📊 Streaming...');
+        console.log('📊 Démarrage du streaming...');
         api.subscribe({ ticks: CONFIG.symbol, subscribe: 1 });
         
         api.events.on('data', async (data) => {
@@ -154,7 +174,7 @@ async function fetchCandles() {
                 close: parseFloat(c.close),
                 epoch: c.epoch
             }));
-            console.log(`📊 ${state.candles.length} bougies`);
+            console.log(`📊 ${state.candles.length} bougies chargées`);
         }
     } catch (err) {
         console.error('❌ Erreur bougies:', err.message);
@@ -219,10 +239,10 @@ async function runStrategy() {
         const sellSignal = ma100 > ma200 && prevClose > ma200 && currentClose < ma200 && distance >= threshold;
 
         if (buySignal && !state.currentPosition) {
-            console.log(`📈 BUY | ${currentClose.toFixed(2)}`);
+            console.log(`📈 BUY signal | ${currentClose.toFixed(2)}`);
             state.lastSignal = 'BUY';
         } else if (sellSignal && !state.currentPosition) {
-            console.log(`📉 SELL | ${currentClose.toFixed(2)}`);
+            console.log(`📉 SELL signal | ${currentClose.toFixed(2)}`);
             state.lastSignal = 'SELL';
         }
 
@@ -234,9 +254,9 @@ async function runStrategy() {
 }
 
 // ============ DÉMARRAGE ============
-console.log('🤖 Deriv Bot v3.0');
-console.log(`📊 ${CONFIG.symbol}`);
-console.log(`🔑 ${CONFIG.token ? 'Token OK' : '❌ TOKEN MANQUANT'}`);
+console.log('🤖 Deriv Bot v3.1');
+console.log(`📊 Symbole: ${CONFIG.symbol}`);
+console.log(`🔑 Token: ${CONFIG.token ? '✅ Présent' : '❌ MANQUANT'}`);
 
 if (!CONFIG.token) {
     console.error('❌ DERIV_TOKEN manquant !');
