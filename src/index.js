@@ -56,45 +56,32 @@ function connectDeriv() {
     api = new DerivAPI({ connection });
     const basic = api.basic;
 
-    connection.onopen = async () => {
-        console.log('✅ WebSocket connecté');
+   connection.onopen = async () => {
+    console.log('✅ WebSocket connecté');
+    
+    try {
+        console.log('🔑 Tentative d\'authentification...');
+        console.log(`🔑 Token: ${CONFIG.token ? CONFIG.token.substring(0, 8) + '...' : 'NON DÉFINI'}`);
         
-        try {
-            console.log('🔑 Tentative d\'authentification...');
-            
-            if (!CONFIG.token) {
-                console.error('❌ DERIV_TOKEN non défini dans les variables d\'environnement');
-                console.log('🔄 Nouvelle tentative dans 10s...');
-                setTimeout(connectDeriv, 10000);
-                return;
-            }
-            
-            await basic.authorize(CONFIG.token);
-            console.log('✅ Authentifié avec succès');
-            
-            // Démarrer le streaming
-            startCandleStream();
-            
-            // Vérifier les positions existantes
-            await checkExistingPositions();
-            
-            // Démarrer la stratégie
-            setInterval(runStrategy, 10000);
-            
-            // Log de statut toutes les minutes
-            setInterval(() => {
-                console.log(`⏳ Bot actif | ${new Date().toISOString()} | Positions: ${state.currentPosition ? '1' : '0'}`);
-            }, 60000);
-            
-            console.log('🚀 Bot démarré, en attente de signaux...');
-            
-        } catch (err) {
-            console.error('❌ Erreur d\'authentification:', err.message);
-            console.log('🔄 Nouvelle tentative dans 5s...');
-            setTimeout(connectDeriv, 5000);
+        // ⚠️ IMPORTANT : Vérifie que le token n'est pas vide
+        if (!CONFIG.token) {
+            console.error('❌ DERIV_TOKEN non défini dans les variables d\'environnement');
+            return;
         }
-    };
-
+        
+        const authResponse = await basic.authorize(CONFIG.token);
+        console.log('✅ Authentifié avec succès');
+        console.log('📋 Réponse auth:', JSON.stringify(authResponse).substring(0, 200));
+        
+        // ... le reste du code
+        
+    } catch (err) {
+        console.error('❌ Erreur d\'authentification:', err.message);
+        console.error('📚 Stack:', err.stack);
+        console.log('🔄 Nouvelle tentative dans 5s...');
+        setTimeout(connectDeriv, 5000);
+    }
+};
     connection.onclose = () => {
         console.log('🔌 WebSocket fermé, reconnexion dans 5s...');
         setTimeout(connectDeriv, 5000);
