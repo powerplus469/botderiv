@@ -1,6 +1,8 @@
 require('dotenv').config();
 const WebSocket = require('ws');
-const DerivAPI = require('@deriv/deriv-api/dist/DerivAPI');
+
+const DerivAPI = require('@deriv/deriv-api'); 
+//const DerivAPI = require('@deriv/deriv-api/dist/DerivAPI');
 // Import Firebase
 const {
     initFirebase,
